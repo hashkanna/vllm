@@ -781,6 +781,19 @@ def _run_decoder_layers(
     return hidden_states
 
 
+def _should_use_kv_sharing_fast_prefill(
+    logits_indices_padded: torch.Tensor | None,
+    num_logits_indices: int | None,
+    batch_size: int,
+) -> bool:
+    return (
+        logits_indices_padded is not None
+        and num_logits_indices is not None
+        and num_logits_indices < batch_size
+        and logits_indices_padded.size(0) < batch_size
+    )
+
+
 @support_torch_compile(
     enable_if=lambda vllm_config: vllm_config.cache_config.kv_sharing_fast_prefill
 )
@@ -1208,6 +1221,25 @@ class Gemma4Model(nn.Module, EagleModelMixin):
                 num_logits_indices = layer_attn_metadata.num_logits_indices
 
         batch_size = positions.size(0)
+        if not _should_use_kv_sharing_fast_prefill(
+            logits_indices_padded,
+            num_logits_indices,
+            batch_size,
+        ):
+            self_decoder_hidden_states, per_layer_inputs = self.self_decoder(
+                input_ids=input_ids,
+                positions=positions,
+                inputs_embeds=inputs_embeds,
+                per_layer_inputs=per_layer_inputs,
+                **kwargs,
+            )
+            return self.cross_decoder(
+                positions,
+                self_decoder_hidden_states,
+                per_layer_inputs,
+                **kwargs,
+            )
+
         self.positions[:batch_size].copy_(positions)
         self_decoder_hidden_states, per_layer_inputs = self.self_decoder(
             input_ids=input_ids,
