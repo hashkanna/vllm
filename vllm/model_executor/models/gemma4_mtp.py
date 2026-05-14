@@ -58,6 +58,12 @@ from .utils import (
 logger = init_logger(__name__)
 
 
+def _get_mtp_num_kv_heads(config, is_full_attention: bool) -> int:
+    if is_full_attention and getattr(config, "attention_k_eq_v", False):
+        return getattr(config, "num_global_key_value_heads", config.num_key_value_heads)
+    return config.num_key_value_heads
+
+
 class Gemma4MTPMaskedEmbedder(nn.Module):
     """Sparse logit computation via centroid-based vocabulary masking.
 
@@ -283,7 +289,7 @@ class Gemma4MTPDecoderLayer(nn.Module):
             config=config,
             hidden_size=self.hidden_size,
             num_heads=config.num_attention_heads,
-            num_kv_heads=config.num_key_value_heads,
+            num_kv_heads=_get_mtp_num_kv_heads(config, is_full_attention),
             head_dim=head_dim,
             max_position_embeddings=config.max_position_embeddings,
             cache_config=cache_config,
