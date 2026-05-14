@@ -543,6 +543,7 @@ class Gemma4MTP(nn.Module):
             )
         else:
             self.masked_embedding = None
+        self._full_lm_head_weight_cache: torch.Tensor | None = None
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.embed_input_ids(input_ids)
@@ -566,15 +567,22 @@ class Gemma4MTP(nn.Module):
             spec_step_idx,
         )
 
+    def _invalidate_full_lm_head_weight_cache(self) -> None:
+        self._full_lm_head_weight_cache = None
+
     def _get_full_lm_head_weight(self) -> torch.Tensor:
         lm_head_weight = self.lm_head.weight
+        assert self.masked_embedding is not None
+        vocab_size = self.masked_embedding.vocab_size
         tp_size = get_tensor_model_parallel_world_size()
         if tp_size > 1:
-            lm_head_weight = tensor_model_parallel_all_gather(
-                lm_head_weight,
-                dim=0,
-            )
-        return lm_head_weight[: self.masked_embedding.vocab_size]
+            if self._full_lm_head_weight_cache is None:
+                self._full_lm_head_weight_cache = tensor_model_parallel_all_gather(
+                    lm_head_weight,
+                    dim=0,
+                )[:vocab_size]
+            return self._full_lm_head_weight_cache
+        return lm_head_weight[:vocab_size]
 
     def compute_logits(
         self,
@@ -599,5 +607,9 @@ class Gemma4MTP(nn.Module):
         )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        self._invalidate_full_lm_head_weight_cache()
         loader = AutoWeightsLoader(self)
-        return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
+        try:
+            return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
+        finally:
+            self._invalidate_full_lm_head_weight_cache()
