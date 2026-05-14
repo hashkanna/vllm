@@ -14,7 +14,6 @@ processor inserts ``mm:ss`` timestamps between frames so the model can
 reason about temporal order.
 """
 
-import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Annotated, Any, Literal
 
@@ -31,6 +30,9 @@ from transformers.models.gemma4 import (
 from transformers.models.gemma4.configuration_gemma4 import (
     Gemma4AudioConfig,
     Gemma4TextConfig,
+)
+from transformers.models.gemma4.image_processing_pil_gemma4 import (
+    get_aspect_ratio_preserving_size,
 )
 
 from vllm.config import VllmConfig
@@ -286,21 +288,16 @@ class Gemma4ProcessingInfo(BaseProcessingInfo):
         if max_soft_tokens is None:
             max_soft_tokens = vision_cfg.default_output_length
 
-        unit = patch_size * pooling_kernel_size
         max_patches = max_soft_tokens * pooling_kernel_size**2
-        num_patches_orig = (image_height / patch_size) * (image_width / patch_size)
-        scale = math.sqrt(max_patches / num_patches_orig)
-        target_h = max(unit, int(math.floor(image_height * scale / unit)) * unit)
-        target_w = max(unit, int(math.floor(image_width * scale / unit)) * unit)
+        target_h, target_w = get_aspect_ratio_preserving_size(
+            height=image_height,
+            width=image_width,
+            patch_size=patch_size,
+            max_patches=max_patches,
+            pooling_kernel_size=pooling_kernel_size,
+        )
         num_patches = (target_h // patch_size) * (target_w // patch_size)
-        # Clamp to ``max_soft_tokens``: extreme aspect ratios (e.g. 3x900)
-        # cause the floor() above to round one dim up to ``unit`` while the
-        # other scales freely, which over-shoots ``max_patches``. The HF
-        # Gemma 4 image processor caps its vision-tower output at
-        # ``max_soft_tokens``, so without this clamp the prompt-side
-        # placeholder count exceeds the encoder output and
-        # ``_merge_multimodal_embeddings`` crashes.
-        return min(num_patches // (pooling_kernel_size**2), max_soft_tokens)
+        return num_patches // (pooling_kernel_size**2)
 
     def get_image_repl(
         self,

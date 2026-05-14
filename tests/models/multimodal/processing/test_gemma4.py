@@ -60,12 +60,17 @@ def test_gemma4_image_batching_keeps_variable_patch_counts_unstacked():
         (3, 900, 280),
         # Same pathology should hold for the video-frame budget (70 tokens).
         (900, 3, 70),
+        # Issue #42485 repros: the prompt-side count must match HF's
+        # max-side clamp for extreme aspect ratios.
+        (16000, 16, 280),
+        (10000, 10, 280),
+        (1000, 1, 280),
         # And for any other supported budget.
         (4000, 2, 1120),
     ],
 )
 @pytest.mark.parametrize("model_id", [GEMMA4_MODEL_ID])
-def test_compute_num_soft_tokens_does_not_exceed_max_soft_tokens(
+def test_compute_num_soft_tokens_matches_hf_extreme_aspect_ratio_clamp(
     model_id: str,
     image_width: int,
     image_height: int,
@@ -93,12 +98,12 @@ def test_compute_num_soft_tokens_does_not_exceed_max_soft_tokens(
         max_soft_tokens=max_soft_tokens,
     )
 
-    assert num_soft_tokens <= max_soft_tokens, (
+    assert num_soft_tokens == max_soft_tokens, (
         f"_compute_num_soft_tokens returned {num_soft_tokens} for "
         f"image_width={image_width}, image_height={image_height}, "
-        f"max_soft_tokens={max_soft_tokens} — exceeds the cap that the HF "
-        f"image processor enforces on its vision tower output. This is "
-        f"the placeholder/encoder count mismatch that crashes EngineCore."
+        f"max_soft_tokens={max_soft_tokens}; expected the HF image "
+        f"processor's max-side clamp to keep the placeholder count exactly "
+        f"at the configured budget."
     )
 
 
